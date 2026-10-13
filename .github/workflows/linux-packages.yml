@@ -1,0 +1,133 @@
+name: Linux packages
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - feature/linux-support
+    tags:
+      - "v*"
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  appimage:
+    name: AppImage (x86_64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            desktop-file-utils \
+            file \
+            gstreamer1.0-libav \
+            gstreamer1.0-plugins-good \
+            libasound2-dev \
+            libayatana-appindicator3-dev \
+            libfuse2t64 \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: pnpm tauri build --bundles appimage
+
+      - name: Validate AppImage
+        run: |
+          artifact="$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+          test -n "$artifact"
+          test -x "$artifact"
+          file "$artifact" | tee appimage-file.txt
+          file "$artifact" | grep --quiet 'ELF 64-bit.*x86-64'
+          "$artifact" --appimage-extract >/dev/null
+          file squashfs-root/usr/bin/cremeplay | tee appimage-binary-file.txt
+          file squashfs-root/usr/bin/cremeplay | grep --quiet 'ELF 64-bit.*x86-64'
+          desktop_file="$(find -L squashfs-root -maxdepth 2 -type f -name '*.desktop' -print -quit)"
+          test -n "$desktop_file"
+          desktop-file-validate "$desktop_file"
+          mkdir -p dist/appimage
+          cp "$artifact" dist/appimage/
+          sha256sum "$artifact" > dist/appimage/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cremeplay-appimage-x86_64
+          path: dist/appimage/
+          if-no-files-found: error
+
+  arch-package:
+    name: Arch Linux package (x86_64)
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Arch build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            alsa-lib \
+            desktop-file-utils \
+            git \
+            gtk3 \
+            hicolor-icon-theme \
+            libayatana-appindicator \
+            nodejs \
+            pnpm \
+            rust \
+            webkit2gtk-4.1
+
+      - name: Build package with makepkg
+        run: |
+          build_root="$RUNNER_TEMP/cremeplay-arch-package"
+          install -d "$build_root"
+          cp PKGBUILD "$build_root/PKGBUILD"
+          sed -i "s|git+https://github.com/svetlisashkov/cremeplay.git|git+file://$GITHUB_WORKSPACE|" "$build_root/PKGBUILD"
+          useradd --create-home builder
+          chown -R builder:builder "$build_root" "$GITHUB_WORKSPACE"
+          runuser -u builder -- bash -lc "cd '$build_root' && makepkg --cleanbuild --clean --check --noconfirm"
+          install -d artifacts/arch
+          cp "$build_root"/*.pkg.tar.zst artifacts/arch/
+
+      - name: Validate and install package
+        run: |
+          package="$(find artifacts/arch -maxdepth 1 -type f -name '*.pkg.tar.zst' -print -quit)"
+          test -n "$package"
+          pacman -Qip "$package"
+          pacman -U --noconfirm "$package"
+          file /usr/bin/cremeplay | tee artifacts/arch/binary-file.txt
+          file /usr/bin/cremeplay | grep --quiet 'ELF 64-bit.*x86-64'
+          desktop-file-validate /usr/share/applications/com.cremeplay.desktop.desktop
+          sha256sum "$package" > artifacts/arch/SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cremeplay-arch-x86_64
+          path: artifacts/arch/
+          if-no-files-found: error

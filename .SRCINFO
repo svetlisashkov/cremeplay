@@ -1,0 +1,27 @@
+pkgbase = cremeplay-git
+	pkgdesc = Lightweight native YouTube Music client built with Tauri and Rust
+	pkgver = 1.1.0.r19.g5e8fe7c
+	pkgrel = 2
+	url = https://github.com/svetlisashkov/cremeplay
+	arch = x86_64
+	license = MIT
+	options = !debug
+	makedepends = git
+	makedepends = nodejs
+	makedepends = pnpm
+	makedepends = rust
+	depends = alsa-lib
+	depends = gtk3
+	depends = hicolor-icon-theme
+	depends = libayatana-appindicator
+	depends = webkit2gtk-4.1
+	optdepends = pipewire-alsa: PipeWire audio through the ALSA compatibility layer
+	optdepends = gst-plugins-good: WebKit media playback support
+	optdepends = gst-libav: additional WebKit media codecs
+	optdepends = discord: Discord Rich Presence integration
+	provides = cremeplay
+	conflicts = cremeplay
+	source = cremeplay::git+https://github.com/svetlisashkov/cremeplay.git
+	sha256sums = SKIP
+
+pkgname = cremeplay-git

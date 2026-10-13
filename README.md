@@ -133,9 +133,43 @@ cargo build --release --locked --manifest-path src-tauri/Cargo.toml
 KDE Plasma 6 is supported on Wayland through WebKitGTK. Global shortcuts use
 XWayland when `DISPLAY` is available and are disabled gracefully in pure
 Wayland sessions. Native audio uses ALSA; install and enable `pipewire-alsa` on
-PipeWire desktops. Tauri's Linux configuration produces a `.deb` bundle with
-`pnpm build`. Arch Linux and EndeavourOS users can build the VCS package with
-the included `PKGBUILD`.
+PipeWire desktops. `pnpm build` produces both `.deb` and AppImage bundles.
+
+#### EndeavourOS / Arch Linux
+
+Install an already-built package with pacman:
+
+```bash
+sudo pacman -U ./cremeplay-git-*.pkg.tar.zst
+```
+
+To build and install directly from this repository, install the standard Arch
+build tools and run `makepkg` as a regular user (never as root):
+
+```bash
+sudo pacman -S --needed base-devel git
+git clone https://github.com/svetlisashkov/cremeplay.git
+cd cremeplay
+makepkg -si
+```
+
+The PKGBUILD installs the native executable, Freedesktop launcher, and hicolor
+icons. `pipewire-alsa` is optional but recommended on a standard EndeavourOS
+PipeWire desktop.
+
+#### Portable AppImage
+
+Download the x86_64 AppImage, make it executable, and run it without installing:
+
+```bash
+chmod +x ./Cremeplay_*_amd64.AppImage
+./Cremeplay_*_amd64.AppImage
+```
+
+Build it locally with `pnpm tauri build --bundles appimage`. The output is
+written to `src-tauri/target/release/bundle/appimage/`. The Linux packaging
+workflow under `.github/workflows/` builds and validates both the Arch package
+and AppImage and exposes them as downloadable workflow artifacts.
 
 ---
 

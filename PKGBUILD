@@ -1,26 +1,30 @@
 # Maintainer: Cremeplay contributors
 
 pkgname=cremeplay-git
-pkgver=1.1.0.r0.g5f39623
-pkgrel=1
+pkgver=1.1.0.r19.g5e8fe7c
+pkgrel=2
 pkgdesc="Lightweight native YouTube Music client built with Tauri and Rust"
 arch=('x86_64')
 url="https://github.com/svetlisashkov/cremeplay"
 license=('MIT')
+options=('!debug')
 depends=(
   'alsa-lib'
   'gtk3'
+  'hicolor-icon-theme'
   'libayatana-appindicator'
   'webkit2gtk-4.1'
 )
 makedepends=(
-  'cargo'
   'git'
   'nodejs'
   'pnpm'
+  'rust'
 )
 optdepends=(
   'pipewire-alsa: PipeWire audio through the ALSA compatibility layer'
+  'gst-plugins-good: WebKit media playback support'
+  'gst-libav: additional WebKit media codecs'
   'discord: Discord Rich Presence integration'
 )
 provides=('cremeplay')
@@ -37,17 +41,20 @@ pkgver() {
 prepare() {
   cd cremeplay
   pnpm install --frozen-lockfile
+  cargo fetch --locked --manifest-path src-tauri/Cargo.toml
 }
 
 build() {
   cd cremeplay
   pnpm build:frontend
-  cargo build --release --locked --manifest-path src-tauri/Cargo.toml
+  CARGO_NET_OFFLINE=true cargo build --release --frozen \
+    --manifest-path src-tauri/Cargo.toml
 }
 
 check() {
   cd cremeplay
-  cargo check --locked --manifest-path src-tauri/Cargo.toml
+  CARGO_NET_OFFLINE=true cargo test --frozen \
+    --manifest-path src-tauri/Cargo.toml
 }
 
 package() {
@@ -57,8 +64,10 @@ package() {
     "$pkgdir/usr/bin/cremeplay"
   install -Dm644 packaging/linux/com.cremeplay.desktop.desktop \
     "$pkgdir/usr/share/applications/com.cremeplay.desktop.desktop"
-  install -Dm644 frontend/public/cremeplay.png \
-    "$pkgdir/usr/share/icons/hicolor/512x512/apps/com.cremeplay.desktop.png"
+  install -Dm644 src-tauri/icons/128x128.png \
+    "$pkgdir/usr/share/icons/hicolor/128x128/apps/com.cremeplay.desktop.png"
+  install -Dm644 src-tauri/icons/128x128@2x.png \
+    "$pkgdir/usr/share/icons/hicolor/256x256/apps/com.cremeplay.desktop.png"
   install -Dm644 LICENSE \
     "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

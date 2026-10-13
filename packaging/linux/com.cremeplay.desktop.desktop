@@ -6,5 +6,6 @@ Exec=cremeplay
 Icon=com.cremeplay.desktop
 Terminal=false
 Categories=AudioVideo;Audio;Music;Player;
+Keywords=YouTube;Music;Audio;Player;
 StartupNotify=true
 StartupWMClass=Cremeplay
