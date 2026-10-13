@@ -409,13 +409,11 @@ pub async fn open_login_window(
             .parse()
             .map_err(|e| format!("{:?}", e))?;
 
-    let chrome_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.152 Safari/537.36";
-
     let win = WebviewWindowBuilder::new(&app, "auth", WebviewUrl::External(login_url))
         .title("Sign in - YouTube Music")
         .inner_size(540.0, 720.0)
         .center()
-        .user_agent(chrome_ua)
+        .user_agent(crate::platform::authentication_user_agent())
         .build()
         .map_err(|e| e.to_string())?;
 

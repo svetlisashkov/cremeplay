@@ -88,7 +88,11 @@ Cremeplay automatically runs a lightweight Tuna server on `http://127.0.0.1:1608
 
 ## Building from Source
 
-Requires Windows 10/11, [Rust](https://rustup.rs/) (MSVC toolchain), and [Node.js](https://nodejs.org/) (v20+ with pnpm):
+Requires [Rust](https://rustup.rs/) 1.90+, [Node.js](https://nodejs.org/) 20+, and pnpm.
+
+### Windows
+
+Windows builds require Windows 10/11, the MSVC toolchain, and WebView2:
 
 ```powershell
 # Clone the repository
@@ -108,6 +112,31 @@ pnpm build
 The compiled release binary is output to:
 `.\src-tauri\target\release\cremeplay.exe`
 
+### Linux
+
+Linux builds use WebKitGTK 4.1, GTK 3, Ayatana AppIndicator, and ALSA. On
+Debian or Ubuntu, install the native build dependencies with:
+
+```bash
+sudo apt install build-essential curl file libasound2-dev \
+  libayatana-appindicator3-dev librsvg2-dev libwebkit2gtk-4.1-dev
+```
+
+Then build the frontend and native application:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build:frontend
+cargo build --release --locked --manifest-path src-tauri/Cargo.toml
+```
+
+KDE Plasma 6 is supported on Wayland through WebKitGTK. Global shortcuts use
+XWayland when `DISPLAY` is available and are disabled gracefully in pure
+Wayland sessions. Native audio uses ALSA; install and enable `pipewire-alsa` on
+PipeWire desktops. Tauri's Linux configuration produces a `.deb` bundle with
+`pnpm build`. Arch Linux and EndeavourOS users can build the VCS package with
+the included `PKGBUILD`.
+
 ---
 
 ## Integrations
@@ -117,7 +146,7 @@ The compiled release binary is output to:
 | **OBS Tuna** | Real-time track metadata and cover art server for OBS and desktop widgets | `http://127.0.0.1:1608/` |
 | **Discord RPC** | Shows current track, artist, album art, and live elapsed timer on Discord | Enabled |
 | **SponsorBlock** | Skips non-music intros, interludes, and chatter automatically | Enabled |
-| **WASAPI Audio** | Low-latency direct sound output via `rodio` | Enabled |
+| **Native Audio** | Low-latency output via WASAPI on Windows or ALSA/PipeWire on Linux | Enabled |
 
 ---
 

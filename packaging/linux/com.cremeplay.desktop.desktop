@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Cremeplay
+Comment=Lightweight native YouTube Music client
+Exec=cremeplay
+Icon=com.cremeplay.desktop
+Terminal=false
+Categories=AudioVideo;Audio;Music;Player;
+StartupNotify=true
+StartupWMClass=Cremeplay

@@ -1,6 +1,9 @@
 /**
  * Native Rust Audio Engine (rodio 0.22 + symphonia)
- * Zero-overhead audio playback directly to Windows WASAPI sound device.
+ * Zero-overhead audio playback through the platform default device.
+ *
+ * Windows uses WASAPI. Linux uses ALSA, including PipeWire's ALSA compatibility
+ * layer on modern KDE Plasma and other Wayland desktops.
  */
 
 use crate::innertube::TrackItem;
@@ -132,7 +135,16 @@ impl AudioPlayer {
         if sink_guard.is_none() {
             match DeviceSinkBuilder::open_default_sink() {
                 Ok(s) => *sink_guard = Some(s),
-                Err(e) => return Err(format!("No audio output device available: {:?}", e)),
+                Err(e) => {
+                    #[cfg(target_os = "linux")]
+                    return Err(format!(
+                        "No audio output device available: {:?}. Check the ALSA default device or pipewire-alsa setup",
+                        e
+                    ));
+
+                    #[cfg(not(target_os = "linux"))]
+                    return Err(format!("No audio output device available: {:?}", e));
+                }
             }
         }
         let sink = sink_guard.as_ref().unwrap();

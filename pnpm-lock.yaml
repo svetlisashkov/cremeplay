@@ -20,6 +20,9 @@ importers:
       lyric-romanizer:
         specifier: ^0.3.1
         version: 0.3.1
+      pinyin-pro:
+        specifier: ^3.29.4
+        version: 3.29.4
       transliteration:
         specifier: ^2.6.1
         version: 2.6.1

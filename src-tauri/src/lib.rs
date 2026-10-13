@@ -4,6 +4,7 @@ mod config;
 mod discord;
 mod innertube;
 pub mod lrclib;
+mod platform;
 pub mod process_job;
 mod sponsorblock;
 mod tray;
@@ -26,24 +27,28 @@ use tauri::{Manager, WindowEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    platform::prepare_runtime();
 
     // Panic Hook: write critical crashes to logs/panic.txt for instant debugging
     std::panic::set_hook(Box::new(|info| {
         let msg = format!("[PANIC] {}", info);
         eprintln!("{}", msg);
         log::error!("{}", msg);
-        let log_dir = std::path::PathBuf::from(
-            std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into()),
-        )
-        .join("com.cremeplay.desktop")
-        .join("logs");
+        let log_dir = platform::panic_log_dir();
         let _ = std::fs::create_dir_all(&log_dir);
         let _ = std::fs::write(log_dir.join("panic.txt"), &msg);
     }));
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_log::Builder::default().build())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_log::Builder::default().build());
+
+    let builder = if platform::global_shortcuts_supported() {
+        builder.plugin(tauri_plugin_global_shortcut::Builder::new().build())
+    } else {
+        log::warn!("[Shortcuts] Pure Wayland session detected; X11 global shortcuts are disabled");
+        builder
+    };
+
+    builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.unminimize();
