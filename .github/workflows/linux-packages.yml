@@ -104,11 +104,28 @@ jobs:
             webkit2gtk-4.1
 
       - name: Build package with makepkg
+        env:
+          BUILD_COMMIT: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          BUILD_REPOSITORY_URL: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.clone_url || format('{0}/{1}.git', github.server_url, github.repository) }}
         run: |
+          case "$BUILD_REPOSITORY_URL" in
+            https://*) ;;
+            *) echo "Package source must use HTTPS" >&2; exit 1 ;;
+          esac
+          case "$BUILD_COMMIT" in
+            ''|*[!0-9a-f]*) echo "Invalid package commit: $BUILD_COMMIT" >&2; exit 1 ;;
+          esac
+          test "${#BUILD_COMMIT}" -eq 40
+
           build_root="$RUNNER_TEMP/cremeplay-arch-package"
           install -d "$build_root"
           cp PKGBUILD "$build_root/PKGBUILD"
-          sed -i "s|git+https://github.com/svetlisashkov/cremeplay.git|git+file://$GITHUB_WORKSPACE|" "$build_root/PKGBUILD"
+          sed -i \
+            "s|^source=.*|source=('cremeplay::git+$BUILD_REPOSITORY_URL#commit=$BUILD_COMMIT')|" \
+            "$build_root/PKGBUILD"
+          grep -Fqx \
+            "source=('cremeplay::git+$BUILD_REPOSITORY_URL#commit=$BUILD_COMMIT')" \
+            "$build_root/PKGBUILD"
           useradd --create-home builder
           chown -R builder:builder "$build_root" "$GITHUB_WORKSPACE"
           runuser -u builder -- bash -lc "cd '$build_root' && makepkg --cleanbuild --clean --check --noconfirm"
