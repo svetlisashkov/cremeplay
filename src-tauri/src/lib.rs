@@ -12,12 +12,12 @@ mod tuna;
 
 use audio_player::AudioPlayer;
 use commands::{
-    get_account_profile, get_explore_feed, get_home_feed, get_liked_songs, get_lyrics,
-    get_playlist_or_album, get_player_status, get_radio_queue, get_search_suggestions,
-    get_settings, get_user_playlists, log_playback_diagnostic, logout, on_login_complete,
-    on_playback_state_change, on_song_change, open_login_window, play_track, search_music,
-    set_auth_cookies, set_volume, toggle_playback, update_playback_progress, update_settings,
-    AppState,
+    AppState, YoutubePlayerHost, get_account_profile, get_explore_feed, get_home_feed,
+    get_liked_songs, get_lyrics, get_player_status, get_playlist_or_album, get_radio_queue,
+    get_search_suggestions, get_settings, get_user_playlists, get_youtube_player_url,
+    log_playback_diagnostic, logout, on_login_complete, on_playback_state_change, on_song_change,
+    open_login_window, play_track, search_music, set_auth_cookies, set_volume, toggle_playback,
+    update_playback_progress, update_settings,
 };
 use config::ConfigManager;
 use discord::DiscordManager;
@@ -25,6 +25,14 @@ use innertube::InnertubeClient;
 use log::info;
 use std::sync::Arc;
 use tauri::{Manager, WindowEvent};
+
+#[cfg(all(target_os = "linux", not(dev)))]
+fn pick_youtube_player_port() -> std::io::Result<u16> {
+    use std::net::{Ipv4Addr, TcpListener};
+
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    Ok(listener.local_addr()?.port())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -41,6 +49,38 @@ pub fn run() {
     }));
 
     let builder = tauri::Builder::default().plugin(tauri_plugin_log::Builder::default().build());
+
+    #[cfg(all(target_os = "linux", not(dev)))]
+    let (builder, youtube_player_url) = {
+        let port = pick_youtube_player_port()
+            .expect("failed to reserve a loopback port for YouTube playback");
+        let url = format!("http://127.0.0.1:{port}/youtube-player.html");
+        let plugin = tauri_plugin_localhost::Builder::new(port)
+            .host("127.0.0.1")
+            .on_request(|request, response| {
+                response.add_header("X-Content-Type-Options", "nosniff");
+                if request.url().starts_with("/youtube-player.html") {
+                    response.add_header("Referrer-Policy", "strict-origin-when-cross-origin");
+                    response.add_header(
+                        "Content-Security-Policy",
+                        "default-src 'none'; script-src 'self' https://www.youtube.com; frame-src https://www.youtube.com; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+                    );
+                }
+            })
+            .build();
+
+        info!(
+            "[Playback][Iframe] Linux YouTube player host configured at http://127.0.0.1:{port}; Tauri IPC is not granted to this origin"
+        );
+        (builder.plugin(plugin), Some(url))
+    };
+
+    #[cfg(not(all(target_os = "linux", not(dev))))]
+    let (builder, youtube_player_url) = (builder, None);
+
+    let builder = builder.manage(YoutubePlayerHost {
+        url: youtube_player_url,
+    });
 
     let builder = if platform::global_shortcuts_supported() {
         builder.plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -137,6 +177,7 @@ pub fn run() {
             toggle_playback,
             set_volume,
             get_player_status,
+            get_youtube_player_url,
             log_playback_diagnostic,
             get_settings,
             update_settings,

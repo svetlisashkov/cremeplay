@@ -20,6 +20,15 @@ pub struct AppState {
     pub player: Arc<AudioPlayer>,
 }
 
+pub struct YoutubePlayerHost {
+    pub url: Option<String>,
+}
+
+#[tauri::command]
+pub fn get_youtube_player_url(host: State<'_, YoutubePlayerHost>) -> Option<String> {
+    host.url.clone()
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaybackDiagnostic {
@@ -30,6 +39,7 @@ pub struct PlaybackDiagnostic {
     pub player_state: Option<i32>,
     pub player_state_name: String,
     pub page_origin: String,
+    pub player_host_origin: String,
     pub iframe_origin: Option<String>,
     pub iframe_referrer_policy: Option<String>,
     pub iframe_allow: Option<String>,
@@ -48,7 +58,7 @@ fn compact_diagnostic_field(value: &str) -> String {
 #[tauri::command]
 pub fn log_playback_diagnostic(diagnostic: PlaybackDiagnostic) -> Result<(), String> {
     let line = format!(
-        "[Playback][Iframe] event={} video_id={} error_code={} error_name={} player_state={} state_name={} page_origin={} iframe_origin={} referrer_policy={} allow={} media_support={} user_agent={}",
+        "[Playback][Iframe] event={} video_id={} error_code={} error_name={} player_state={} state_name={} page_origin={} player_host_origin={} iframe_origin={} referrer_policy={} allow={} media_support={} user_agent={}",
         compact_diagnostic_field(&diagnostic.event),
         compact_diagnostic_field(diagnostic.video_id.as_deref().unwrap_or("none")),
         diagnostic.error_code.map_or_else(|| "none".to_string(), |code| code.to_string()),
@@ -56,6 +66,7 @@ pub fn log_playback_diagnostic(diagnostic: PlaybackDiagnostic) -> Result<(), Str
         diagnostic.player_state.map_or_else(|| "none".to_string(), |state| state.to_string()),
         compact_diagnostic_field(&diagnostic.player_state_name),
         compact_diagnostic_field(&diagnostic.page_origin),
+        compact_diagnostic_field(&diagnostic.player_host_origin),
         compact_diagnostic_field(diagnostic.iframe_origin.as_deref().unwrap_or("none")),
         compact_diagnostic_field(diagnostic.iframe_referrer_policy.as_deref().unwrap_or("none")),
         compact_diagnostic_field(diagnostic.iframe_allow.as_deref().unwrap_or("none")),

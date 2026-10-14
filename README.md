@@ -176,8 +176,13 @@ and AppImage and exposes them as downloadable workflow artifacts.
 The YouTube IFrame player and the optional native Rust stream path are separate.
 Diagnostic lines beginning with `[Playback][Iframe]` include the YouTube error
 code, player state, WebKit user agent, referrer/origin data, and WebKit media
-capability probes. Lines beginning with `[Playback][Native]` report direct
-stream extraction, decoding, or ALSA/PipeWire output separately.
+capability probes. Production Linux builds keep the privileged application at
+`tauri://localhost` and load only the YouTube player bridge from a random
+`http://127.0.0.1` loopback port. The bridge has no Tauri IPC capability and
+uses `strict-origin-when-cross-origin`, so YouTube receives the HTTP origin as
+the embedder identity without receiving a local path. Lines beginning with
+`[Playback][Native]` report direct stream extraction, decoding, or
+ALSA/PipeWire output separately.
 
 Capture both Cremeplay and GStreamer output while reproducing one failed track:
 
@@ -200,6 +205,22 @@ means the embed request lacks an accepted referrer or equivalent client
 identity. Errors `100`, `101`, and `150` are specific to video availability or
 embedding. Do not include account cookies or other credentials when attaching
 the diagnostic log to an issue.
+
+To verify the Linux error 153 fix, start the newly built AppImage with the
+logging command above, sign in normally, and play at least two tracks. Confirm
+that the log contains all of the following:
+
+- a `Linux YouTube player host configured` line for a `127.0.0.1` URL;
+- `[Playback][Iframe] event=ready` with
+  `page_origin=tauri://localhost`, a `player_host_origin=http://127.0.0.1:...`,
+  and `referrer_policy=strict-origin-when-cross-origin`;
+- `[Playback][Iframe] event=state:playing` for each selected video ID;
+- no `[Playback][Iframe] ... error_code=153` line.
+
+Also confirm that search, Google sign-in, playlists, play/pause, seeking and an
+application restart still work. If error 153 remains, attach the complete log
+and the WebKitGTK version; the bounded fallback logic stops platform-wide error
+153 immediately instead of searching alternate uploads indefinitely.
 
 ---
 

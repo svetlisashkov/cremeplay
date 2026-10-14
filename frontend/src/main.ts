@@ -114,6 +114,7 @@ interface PlaybackDiagnostic {
   playerState: number | null;
   playerStateName: string;
   pageOrigin: string;
+  playerHostOrigin: string;
   iframeOrigin: string | null;
   iframeReferrerPolicy: string | null;
   iframeAllow: string | null;
@@ -271,6 +272,7 @@ function getYTPlayerIframe(): HTMLIFrameElement | null {
 }
 
 function configureYTPlayerIframe() {
+  if (ytPlayer?.isHosted) return;
   const iframe = getYTPlayerIframe();
   if (!iframe) return;
 
@@ -289,24 +291,30 @@ function getMediaSupportDiagnostic(): string {
   return `opus=${opus},vorbis=${vorbis},aac=${aac}`;
 }
 
-function reportPlaybackDiagnostic(event: string, track: TrackItem | null, errorCode: number | null = null) {
+function reportPlaybackDiagnostic(
+  event: string,
+  track: TrackItem | null,
+  errorCode: number | null = null,
+  videoIdOverride?: string | null,
+) {
   const playerState = getYTPlayerState();
   const iframe = getYTPlayerIframe();
-  let iframeOrigin: string | null = null;
+  let iframeOrigin: string | null = ytPlayer?.getEmbedOrigin?.() || null;
   try {
-    iframeOrigin = iframe?.src ? new URL(iframe.src).origin : null;
+    iframeOrigin ||= iframe?.src ? new URL(iframe.src).origin : null;
   } catch {}
 
   const diagnostic: PlaybackDiagnostic = {
     event,
-    videoId: track?.videoId || null,
+    videoId: videoIdOverride === undefined ? (track?.videoId || null) : videoIdOverride,
     errorCode,
     errorName: errorCode === null ? null : (YT_ERROR_NAMES[errorCode] || 'unknown'),
     playerState,
     playerStateName: playerState === null ? 'unavailable' : (YT_PLAYER_STATE_NAMES[playerState] || 'unknown'),
     pageOrigin: window.location.origin,
+    playerHostOrigin: ytPlayer?.getPlayerHostOrigin?.() || window.location.origin,
     iframeOrigin,
-    iframeReferrerPolicy: iframe?.referrerPolicy || null,
+    iframeReferrerPolicy: ytPlayer?.getEmbedReferrerPolicy?.() || iframe?.referrerPolicy || null,
     iframeAllow: iframe?.allow || null,
     userAgent: navigator.userAgent,
     mediaSupport: getMediaSupportDiagnostic(),
@@ -638,7 +646,247 @@ const fmt = (s: number) => (!s || isNaN(s) || s < 0 ? '0:00' : `${Math.floor(s /
 const msg = (t: string) => { view.innerHTML = `<div class="msg">${esc(t)}</div>`; };
 const setActive = (el: HTMLElement | null) => navs.forEach((n) => n.classList.toggle('active', n === el));
 
-function initYTPlayer() {
+const YOUTUBE_HOST_MESSAGE_SOURCE = 'cremeplay-youtube-host-v1';
+const YOUTUBE_APP_MESSAGE_SOURCE = 'cremeplay-main-v1';
+const YOUTUBE_VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
+const YOUTUBE_HOST_MESSAGE_TYPES = new Set([
+  'ready',
+  'state',
+  'status',
+  'error',
+  'autoplay-blocked',
+  'bridge-error',
+]);
+const YOUTUBE_PLAYER_STATES = new Set([-1, 0, 1, 2, 3, 5]);
+
+interface YoutubeHostMessage {
+  source: string;
+  type: string;
+  playerHostOrigin?: string;
+  iframeOrigin?: string;
+  iframeReferrerPolicy?: string;
+  playerState?: number;
+  currentTime?: number;
+  duration?: number;
+  errorCode?: number;
+  videoId?: string | null;
+  message?: string;
+}
+
+class HostedYTPlayer {
+  readonly isHosted = true;
+  private state = -1;
+  private currentTime = 0;
+  private duration = 0;
+  private embedOrigin = 'https://www.youtube.com';
+  private embedReferrerPolicy = 'strict-origin-when-cross-origin';
+
+  constructor(
+    private readonly frame: HTMLIFrameElement,
+    private readonly hostOrigin: string,
+  ) {}
+
+  update(message: YoutubeHostMessage) {
+    if (typeof message.playerState === 'number' && Number.isFinite(message.playerState)) {
+      this.state = message.playerState;
+    }
+    if (typeof message.currentTime === 'number' && Number.isFinite(message.currentTime)) {
+      this.currentTime = message.currentTime;
+    }
+    if (typeof message.duration === 'number' && Number.isFinite(message.duration)) {
+      this.duration = message.duration;
+    }
+    if (message.iframeOrigin === 'https://www.youtube.com') {
+      this.embedOrigin = message.iframeOrigin;
+    }
+    if (message.iframeReferrerPolicy === 'strict-origin-when-cross-origin') {
+      this.embedReferrerPolicy = message.iframeReferrerPolicy;
+    }
+  }
+
+  private send(type: string, payload: Record<string, unknown> = {}) {
+    this.frame.contentWindow?.postMessage(
+      { source: YOUTUBE_APP_MESSAGE_SOURCE, type, payload },
+      this.hostOrigin,
+    );
+  }
+
+  getIframe() { return this.frame; }
+  getPlayerHostOrigin() { return this.hostOrigin; }
+  getEmbedOrigin() { return this.embedOrigin; }
+  getEmbedReferrerPolicy() { return this.embedReferrerPolicy; }
+  getPlayerState() { return this.state; }
+  getCurrentTime() { return this.currentTime; }
+  getDuration() { return this.duration; }
+  loadVideoById(payload: Record<string, unknown>) { this.send('load', payload); }
+  cueVideoById(payload: Record<string, unknown>) { this.send('cue', payload); }
+  playVideo() { this.send('play'); }
+  pauseVideo() { this.send('pause'); }
+  seekTo(seconds: number) { this.send('seek', { seconds }); }
+  setVolume(volume: number) { this.send('volume', { volume }); }
+  setPlaybackQuality(quality: string) { this.send('quality', { quality }); }
+}
+
+function handleYTReady() {
+  ytReady = true;
+  configureYTPlayerIframe();
+  reportPlaybackDiagnostic('ready', current);
+  const savedVolStr = localStorage.getItem('cremeplay_volume');
+  const effectiveVol = savedVolStr !== null ? parseFloat(savedVolStr) : (typeof appSettings.volume === 'number' ? appSettings.volume : 1.0);
+  if (vol) vol.value = String(effectiveVol);
+  try {
+    ytPlayer?.setVolume?.(Math.round(effectiveVol * 100));
+  } catch {}
+
+  if (pendingTrack) {
+    const track = pendingTrack;
+    const startSec = pendingResumeSec;
+    pendingTrack = null;
+    pendingResumeSec = 0;
+    if (appSettings.autoplay) {
+      play(track, queue.length ? queue : [track], qIndex >= 0 ? qIndex : 0, false, startSec);
+    } else {
+      cue(track, queue.length ? queue : [track], qIndex >= 0 ? qIndex : 0, startSec);
+    }
+  }
+}
+
+function handleYTStateChange(state: number) {
+  reportPlaybackDiagnostic(`state:${YT_PLAYER_STATE_NAMES[state] || 'unknown'}`, current);
+  if (state === 1) {
+    setPlay(true);
+    fallbackAttempts = 0;
+    playbackErrorStreak = null;
+    if (isVideoMode) updateCoverContainerLayout();
+  } else if (state === 2) {
+    setPlay(false);
+  } else if (state === 0) {
+    handleTrackEnd();
+  }
+}
+
+async function handleYTError(errorCode: number, reportedVideoId?: string | null) {
+  const videoId = reportedVideoId && YOUTUBE_VIDEO_ID_PATTERN.test(reportedVideoId)
+    ? reportedVideoId
+    : undefined;
+  reportPlaybackDiagnostic(
+    'error',
+    current,
+    Number.isFinite(errorCode) ? errorCode : null,
+    videoId,
+  );
+  if (current && (!videoId || current.videoId === videoId)) {
+    await handlePlaybackError(current, errorCode);
+  } else if (videoId) {
+    reportPlaybackDiagnostic('stale-error-ignored', current, errorCode, videoId);
+  }
+}
+
+function isValidYoutubeHostMessage(message: unknown, hostOrigin: string): message is YoutubeHostMessage {
+  if (!message || typeof message !== 'object') return false;
+  const candidate = message as YoutubeHostMessage;
+  if (
+    candidate.source !== YOUTUBE_HOST_MESSAGE_SOURCE ||
+    !YOUTUBE_HOST_MESSAGE_TYPES.has(candidate.type) ||
+    candidate.playerHostOrigin !== hostOrigin ||
+    candidate.iframeOrigin !== 'https://www.youtube.com' ||
+    candidate.iframeReferrerPolicy !== 'strict-origin-when-cross-origin'
+  ) {
+    return false;
+  }
+  if (
+    candidate.playerState !== undefined &&
+    (!Number.isFinite(candidate.playerState) || !YOUTUBE_PLAYER_STATES.has(candidate.playerState))
+  ) {
+    return false;
+  }
+  if (candidate.type === 'state' && candidate.playerState === undefined) return false;
+  if (candidate.errorCode !== undefined && !Number.isFinite(candidate.errorCode)) return false;
+  if (candidate.type === 'error' && candidate.errorCode === undefined) return false;
+  if (candidate.videoId != null && !YOUTUBE_VIDEO_ID_PATTERN.test(candidate.videoId)) return false;
+  return true;
+}
+
+function validatedYoutubeHostUrl(rawUrl: string): URL | null {
+  try {
+    const url = new URL(rawUrl);
+    if (
+      url.protocol !== 'http:' ||
+      url.hostname !== '127.0.0.1' ||
+      !url.port ||
+      url.pathname !== '/youtube-player.html' ||
+      url.username ||
+      url.password
+    ) {
+      return null;
+    }
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function initHostedYTPlayer(url: URL) {
+  const mount = document.getElementById('yt-player');
+  if (!mount) throw new Error('YouTube player mount is missing');
+
+  const frame = document.createElement('iframe');
+  frame.id = 'yt-player';
+  frame.src = url.href;
+  frame.title = 'YouTube player';
+  frame.allow = 'autoplay; encrypted-media; picture-in-picture';
+  frame.referrerPolicy = 'no-referrer';
+  frame.setAttribute('allowfullscreen', '');
+  mount.replaceWith(frame);
+
+  const hostedPlayer = new HostedYTPlayer(frame, url.origin);
+  ytPlayer = hostedPlayer;
+  let hostReady = false;
+
+  window.addEventListener('message', (event) => {
+    if (event.source !== frame.contentWindow || event.origin !== url.origin) return;
+    if (!isValidYoutubeHostMessage(event.data, url.origin)) return;
+    const message = event.data;
+
+    const previousState = hostedPlayer.getPlayerState();
+    hostedPlayer.update(message);
+    if (message.type === 'ready') {
+      if (hostReady) return;
+      hostReady = true;
+      handleYTReady();
+    } else if (message.type === 'state') {
+      const nextState = Number(message.playerState);
+      if (nextState !== previousState) handleYTStateChange(nextState);
+    } else if (message.type === 'error') {
+      void handleYTError(Number(message.errorCode), message.videoId);
+    } else if (message.type === 'autoplay-blocked') {
+      reportPlaybackDiagnostic('autoplay-blocked', current);
+    } else if (message.type === 'bridge-error') {
+      console.warn('[Cremeplay Player] YouTube host bridge error:', message.message || 'unknown');
+      reportPlaybackDiagnostic('bridge-error', current);
+    }
+  });
+}
+
+async function initYTPlayer() {
+  try {
+    const rawHostUrl = await invoke<string | null>('get_youtube_player_url');
+    if (rawHostUrl) {
+      const hostUrl = validatedYoutubeHostUrl(rawHostUrl);
+      if (!hostUrl) throw new Error('Rust returned an invalid YouTube player host URL');
+      initHostedYTPlayer(hostUrl);
+      return;
+    }
+  } catch (error) {
+    console.error('[Cremeplay Player] Could not initialize the Linux YouTube player host:', error);
+    reportPlaybackDiagnostic('player-host-init-error', current);
+    return;
+  }
+
+  initDirectYTPlayer();
+}
+
+function initDirectYTPlayer() {
   // Listen for YouTube iframe internal postMessages for adState tracking
   window.addEventListener('message', (e) => {
     try {
@@ -762,57 +1010,10 @@ function initYTPlayer() {
         width: '100%',
         playerVars,
         events: {
-          onReady: () => {
-            ytReady = true;
-            configureYTPlayerIframe();
-            reportPlaybackDiagnostic('ready', current);
-            // Restore volume on YT player
-            const savedVolStr = localStorage.getItem('cremeplay_volume');
-            const effectiveVol = savedVolStr !== null ? parseFloat(savedVolStr) : (typeof appSettings.volume === 'number' ? appSettings.volume : 1.0);
-            if (vol) vol.value = String(effectiveVol);
-            try {
-              if (ytPlayer && ytPlayer.setVolume) {
-                ytPlayer.setVolume(Math.round(effectiveVol * 100));
-              }
-            } catch {}
-
-            if (pendingTrack) {
-              const t = pendingTrack;
-              const startSec = pendingResumeSec;
-              pendingTrack = null;
-              pendingResumeSec = 0;
-              if (appSettings.autoplay) {
-                play(t, queue.length ? queue : [t], qIndex >= 0 ? qIndex : 0, false, startSec);
-              } else {
-                cue(t, queue.length ? queue : [t], qIndex >= 0 ? qIndex : 0, startSec);
-              }
-            }
-          },
-          onStateChange: (event: any) => {
-            reportPlaybackDiagnostic(`state:${YT_PLAYER_STATE_NAMES[event.data] || 'unknown'}`, current);
-            if (event.data === 1) {
-              setPlay(true);
-              fallbackAttempts = 0;
-              playbackErrorStreak = null;
-              if (isVideoMode) {
-                updateCoverContainerLayout();
-              }
-            } else if (event.data === 2) {
-              setPlay(false);
-            } else if (event.data === 0) {
-              handleTrackEnd();
-            }
-          },
-          onError: async (e: any) => {
-            const errorCode = Number(e.data);
-            reportPlaybackDiagnostic('error', current, Number.isFinite(errorCode) ? errorCode : null);
-            if (current) {
-              await handlePlaybackError(current, errorCode);
-            }
-          },
-          onAutoplayBlocked: () => {
-            reportPlaybackDiagnostic('autoplay-blocked', current);
-          },
+          onReady: handleYTReady,
+          onStateChange: (event: any) => handleYTStateChange(Number(event.data)),
+          onError: (event: any) => void handleYTError(Number(event.data)),
+          onAutoplayBlocked: () => reportPlaybackDiagnostic('autoplay-blocked', current),
         },
       });
       configureYTPlayerIframe();
