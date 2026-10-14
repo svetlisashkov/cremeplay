@@ -793,6 +793,7 @@ function initYTPlayer() {
             if (event.data === 1) {
               setPlay(true);
               fallbackAttempts = 0;
+              playbackErrorStreak = null;
               if (isVideoMode) {
                 updateCoverContainerLayout();
               }
@@ -808,6 +809,9 @@ function initYTPlayer() {
             if (current) {
               await handlePlaybackError(current, errorCode);
             }
+          },
+          onAutoplayBlocked: () => {
+            reportPlaybackDiagnostic('autoplay-blocked', current);
           },
         },
       });
@@ -826,10 +830,28 @@ const failedVideoIds = new Set<string>();
 let fallbackAttempts = 0;
 const VIDEO_SPECIFIC_YT_ERRORS = new Set([100, 101, 150, 152]);
 const PLATFORM_WIDE_YT_ERRORS = new Set([5, 153]);
+const MAX_CONSECUTIVE_IDENTICAL_ERRORS = 2;
+let playbackErrorStreak: { code: number; videoIds: Set<string> } | null = null;
+
+function recordPlaybackError(track: TrackItem, code: number): number {
+  if (!Number.isFinite(code)) {
+    playbackErrorStreak = null;
+    return 0;
+  }
+
+  if (!playbackErrorStreak || playbackErrorStreak.code !== code) {
+    playbackErrorStreak = { code, videoIds: new Set([track.videoId]) };
+  } else {
+    playbackErrorStreak.videoIds.add(track.videoId);
+  }
+
+  return playbackErrorStreak.videoIds.size;
+}
 
 async function handlePlaybackError(track: TrackItem, code: number) {
   const errorName = YT_ERROR_NAMES[code] || 'unknown';
   console.warn(`[Cremeplay Player] Playback error ${code} (${errorName}) on: ${track.title} (${track.videoId})`);
+  const consecutiveFailures = recordPlaybackError(track, code);
 
   // Error 5 is a WebKit/media pipeline failure and error 153 identifies the
   // embedding client rather than a specific upload. Searching for another
@@ -842,6 +864,17 @@ async function handlePlaybackError(track: TrackItem, code: number) {
     } else {
       showToast('YouTube rejected the embedded player identity (error 153). Alternate uploads will not help.');
     }
+    return;
+  }
+
+  // A second distinct video failing with the same code is evidence that the
+  // problem is not confined to one upload. Stop all automatic search/skip
+  // activity until a track reaches the PLAYING state or the app is restarted.
+  if (consecutiveFailures >= MAX_CONSECUTIVE_IDENTICAL_ERRORS) {
+    fallbackAttempts = 0;
+    setPlay(false);
+    reportPlaybackDiagnostic(`error-streak:${consecutiveFailures}`, track, code);
+    showToast(`Playback stopped after repeated YouTube error ${code}. See Linux diagnostics.`);
     return;
   }
 
