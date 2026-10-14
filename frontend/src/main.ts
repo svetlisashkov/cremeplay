@@ -106,6 +106,21 @@ interface PlayerStatus {
   track: TrackItem | null;
 }
 
+interface PlaybackDiagnostic {
+  event: string;
+  videoId: string | null;
+  errorCode: number | null;
+  errorName: string | null;
+  playerState: number | null;
+  playerStateName: string;
+  pageOrigin: string;
+  iframeOrigin: string | null;
+  iframeReferrerPolicy: string | null;
+  iframeAllow: string | null;
+  userAgent: string;
+  mediaSupport: string;
+}
+
 interface LyricLine {
   timeSec: number;
   text: string;
@@ -218,6 +233,94 @@ let currentLyricsPayload: LyricsPayload | null = null;
 let currentLyricsTrackId = '';
 let activeLyricLineIdx = -1;
 let userLyricsScrollPauseUntil = 0;
+
+const YT_PLAYER_STATE_NAMES: Record<number, string> = {
+  [-1]: 'unstarted',
+  0: 'ended',
+  1: 'playing',
+  2: 'paused',
+  3: 'buffering',
+  5: 'cued',
+};
+
+const YT_ERROR_NAMES: Record<number, string> = {
+  2: 'invalid_parameter',
+  5: 'html5_player_error',
+  100: 'not_found_or_private',
+  101: 'embedding_not_allowed',
+  150: 'embedding_not_allowed',
+  152: 'embedding_restricted',
+  153: 'missing_referrer_or_client_identity',
+};
+
+function getYTPlayerState(): number | null {
+  try {
+    const state = ytPlayer?.getPlayerState?.();
+    return typeof state === 'number' && Number.isFinite(state) ? state : null;
+  } catch {
+    return null;
+  }
+}
+
+function getYTPlayerIframe(): HTMLIFrameElement | null {
+  try {
+    const iframe = ytPlayer?.getIframe?.();
+    if (iframe instanceof HTMLIFrameElement) return iframe;
+  } catch {}
+  return document.querySelector<HTMLIFrameElement>('#yt-player-container iframe');
+}
+
+function configureYTPlayerIframe() {
+  const iframe = getYTPlayerIframe();
+  if (!iframe) return;
+
+  // WebKitGTK cannot expose the cross-origin iframe document. Apply the
+  // referrer policy to the iframe itself before attempting DOM inspection.
+  if (iframe.referrerPolicy !== 'unsafe-url') {
+    iframe.referrerPolicy = 'unsafe-url';
+  }
+}
+
+function getMediaSupportDiagnostic(): string {
+  const media = document.createElement('audio');
+  const opus = media.canPlayType('audio/webm; codecs="opus"') || 'no';
+  const vorbis = media.canPlayType('audio/webm; codecs="vorbis"') || 'no';
+  const aac = media.canPlayType('audio/mp4; codecs="mp4a.40.2"') || 'no';
+  return `opus=${opus},vorbis=${vorbis},aac=${aac}`;
+}
+
+function reportPlaybackDiagnostic(event: string, track: TrackItem | null, errorCode: number | null = null) {
+  const playerState = getYTPlayerState();
+  const iframe = getYTPlayerIframe();
+  let iframeOrigin: string | null = null;
+  try {
+    iframeOrigin = iframe?.src ? new URL(iframe.src).origin : null;
+  } catch {}
+
+  const diagnostic: PlaybackDiagnostic = {
+    event,
+    videoId: track?.videoId || null,
+    errorCode,
+    errorName: errorCode === null ? null : (YT_ERROR_NAMES[errorCode] || 'unknown'),
+    playerState,
+    playerStateName: playerState === null ? 'unavailable' : (YT_PLAYER_STATE_NAMES[playerState] || 'unknown'),
+    pageOrigin: window.location.origin,
+    iframeOrigin,
+    iframeReferrerPolicy: iframe?.referrerPolicy || null,
+    iframeAllow: iframe?.allow || null,
+    userAgent: navigator.userAgent,
+    mediaSupport: getMediaSupportDiagnostic(),
+  };
+
+  if (errorCode === null) {
+    console.info('[Cremeplay Player] IFrame diagnostic:', diagnostic);
+  } else {
+    console.warn('[Cremeplay Player] IFrame diagnostic:', diagnostic);
+  }
+  invoke('log_playback_diagnostic', { diagnostic }).catch((err) => {
+    console.debug('[Cremeplay Player] Could not forward diagnostic to Rust:', err);
+  });
+}
 
 let appSettings: AppConfig = {
   adblock: true,
@@ -558,13 +661,17 @@ function initYTPlayer() {
   setInterval(() => {
     try {
       const iframe = document.getElementById('yt-player') as HTMLIFrameElement;
-      if (!iframe || !iframe.contentDocument) return;
-      const doc = iframe.contentDocument;
+      if (!iframe) return;
 
       // Ensure iframe retains unsafe-url referrer policy
       if (iframe.getAttribute('referrerpolicy') !== 'unsafe-url') {
         iframe.setAttribute('referrerpolicy', 'unsafe-url');
       }
+
+      // Cross-origin YouTube documents are intentionally inaccessible here.
+      // The compatibility attribute above must be applied before this check.
+      if (!iframe.contentDocument) return;
+      const doc = iframe.contentDocument;
 
       // Inject persistent CSS to strip all YouTube watermarks, titles, share buttons, play/pause bezel, and suggestions
       if (!doc.getElementById('cremeplay-clean-embed')) {
@@ -635,22 +742,30 @@ function initYTPlayer() {
 
   window.onYouTubeIframeAPIReady = () => {
     try {
+      const playerVars: Record<string, string | number> = {
+        autoplay: 1,
+        controls: 0,
+        disablekb: 1,
+        enablejsapi: 1,
+        fs: 0,
+        playsinline: 1,
+        rel: 0,
+        iv_load_policy: 3,
+        modestbranding: 1,
+      };
+      if (window.location.origin && window.location.origin !== 'null') {
+        playerVars.origin = window.location.origin;
+      }
+
       ytPlayer = new window.YT.Player('yt-player', {
         height: '100%',
         width: '100%',
-        playerVars: {
-          autoplay: 1,
-          controls: 0,
-          disablekb: 1,
-          fs: 0,
-          playsinline: 1,
-          rel: 0,
-          iv_load_policy: 3,
-          modestbranding: 1,
-        },
+        playerVars,
         events: {
           onReady: () => {
             ytReady = true;
+            configureYTPlayerIframe();
+            reportPlaybackDiagnostic('ready', current);
             // Restore volume on YT player
             const savedVolStr = localStorage.getItem('cremeplay_volume');
             const effectiveVol = savedVolStr !== null ? parseFloat(savedVolStr) : (typeof appSettings.volume === 'number' ? appSettings.volume : 1.0);
@@ -674,6 +789,7 @@ function initYTPlayer() {
             }
           },
           onStateChange: (event: any) => {
+            reportPlaybackDiagnostic(`state:${YT_PLAYER_STATE_NAMES[event.data] || 'unknown'}`, current);
             if (event.data === 1) {
               setPlay(true);
               fallbackAttempts = 0;
@@ -687,13 +803,15 @@ function initYTPlayer() {
             }
           },
           onError: async (e: any) => {
-            console.warn('[Cremeplay Player] YouTube error code:', e.data);
+            const errorCode = Number(e.data);
+            reportPlaybackDiagnostic('error', current, Number.isFinite(errorCode) ? errorCode : null);
             if (current) {
-              await handlePlaybackError(current, e.data);
+              await handlePlaybackError(current, errorCode);
             }
           },
         },
       });
+      configureYTPlayerIframe();
     } catch (err) {
       console.error('[Cremeplay Player] Failed to init YT Player:', err);
     }
@@ -706,9 +824,36 @@ function initYTPlayer() {
 
 const failedVideoIds = new Set<string>();
 let fallbackAttempts = 0;
+const VIDEO_SPECIFIC_YT_ERRORS = new Set([100, 101, 150, 152]);
+const PLATFORM_WIDE_YT_ERRORS = new Set([5, 153]);
 
 async function handlePlaybackError(track: TrackItem, code: number) {
-  console.warn(`[Cremeplay Player] Playback error code ${code} on: ${track.title} (${track.videoId})`);
+  const errorName = YT_ERROR_NAMES[code] || 'unknown';
+  console.warn(`[Cremeplay Player] Playback error ${code} (${errorName}) on: ${track.title} (${track.videoId})`);
+
+  // Error 5 is a WebKit/media pipeline failure and error 153 identifies the
+  // embedding client rather than a specific upload. Searching for another
+  // video cannot fix either condition and would loop across the entire queue.
+  if (PLATFORM_WIDE_YT_ERRORS.has(code)) {
+    fallbackAttempts = 0;
+    setPlay(false);
+    if (code === 5) {
+      showToast('YouTube media playback failed (error 5). Check the WebKitGTK/GStreamer diagnostics.');
+    } else {
+      showToast('YouTube rejected the embedded player identity (error 153). Alternate uploads will not help.');
+    }
+    return;
+  }
+
+  // Only documented video-specific availability/embed errors justify trying
+  // another upload. Unknown and malformed-request failures need diagnostics,
+  // not an automatic search loop.
+  if (!VIDEO_SPECIFIC_YT_ERRORS.has(code)) {
+    fallbackAttempts = 0;
+    setPlay(false);
+    showToast(`YouTube playback failed (error ${Number.isFinite(code) ? code : 'unknown'}). See playback diagnostics.`);
+    return;
+  }
 
   if (failedVideoIds.has(track.videoId)) {
     fallbackAttempts = 0;
@@ -723,7 +868,8 @@ async function handlePlaybackError(track: TrackItem, code: number) {
 
   failedVideoIds.add(track.videoId);
 
-  // If this specific upload has embedding disabled (101, 150, 152, 153), attempt auto-resolving alternate upload
+  // This upload is unavailable or disallows embedding; try a bounded number
+  // of alternate uploads without changing the overall playback architecture.
   if (fallbackAttempts < 2) {
     fallbackAttempts++;
     try {

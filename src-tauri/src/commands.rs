@@ -7,7 +7,7 @@ use crate::innertube::{
 };
 use crate::lrclib::{LrclibClient, LyricsPayload};
 use crate::tuna::TunaManager;
-use log::info;
+use log::{info, warn};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
@@ -18,6 +18,58 @@ pub struct AppState {
     pub innertube: Arc<InnertubeClient>,
     pub lrclib: Arc<LrclibClient>,
     pub player: Arc<AudioPlayer>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaybackDiagnostic {
+    pub event: String,
+    pub video_id: Option<String>,
+    pub error_code: Option<i32>,
+    pub error_name: Option<String>,
+    pub player_state: Option<i32>,
+    pub player_state_name: String,
+    pub page_origin: String,
+    pub iframe_origin: Option<String>,
+    pub iframe_referrer_policy: Option<String>,
+    pub iframe_allow: Option<String>,
+    pub user_agent: String,
+    pub media_support: String,
+}
+
+fn compact_diagnostic_field(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .take(512)
+        .collect()
+}
+
+#[tauri::command]
+pub fn log_playback_diagnostic(diagnostic: PlaybackDiagnostic) -> Result<(), String> {
+    let line = format!(
+        "[Playback][Iframe] event={} video_id={} error_code={} error_name={} player_state={} state_name={} page_origin={} iframe_origin={} referrer_policy={} allow={} media_support={} user_agent={}",
+        compact_diagnostic_field(&diagnostic.event),
+        compact_diagnostic_field(diagnostic.video_id.as_deref().unwrap_or("none")),
+        diagnostic.error_code.map_or_else(|| "none".to_string(), |code| code.to_string()),
+        compact_diagnostic_field(diagnostic.error_name.as_deref().unwrap_or("none")),
+        diagnostic.player_state.map_or_else(|| "none".to_string(), |state| state.to_string()),
+        compact_diagnostic_field(&diagnostic.player_state_name),
+        compact_diagnostic_field(&diagnostic.page_origin),
+        compact_diagnostic_field(diagnostic.iframe_origin.as_deref().unwrap_or("none")),
+        compact_diagnostic_field(diagnostic.iframe_referrer_policy.as_deref().unwrap_or("none")),
+        compact_diagnostic_field(diagnostic.iframe_allow.as_deref().unwrap_or("none")),
+        compact_diagnostic_field(&diagnostic.media_support),
+        compact_diagnostic_field(&diagnostic.user_agent),
+    );
+
+    eprintln!("{line}");
+    if diagnostic.error_code.is_some() {
+        warn!("{line}");
+    } else {
+        info!("{line}");
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -190,9 +242,24 @@ pub async fn play_track(
 ) -> Result<(), String> {
     info!("[Command] Play track: {} - {}", track.title, track.artist);
 
-    // If native stream extraction succeeds, inform player; don't fail if YouTube blocks direct stream extraction
-    if let Ok(stream_url) = state.innertube.get_audio_stream_url(&track.video_id).await {
-        let _ = state.player.play_stream(&stream_url, track.clone()).await;
+    // The IFrame and native stream paths are independent. Keep direct stream
+    // failures non-fatal, but log the exact stage so Linux media failures are
+    // not misdiagnosed as YouTube embed restrictions.
+    match state.innertube.get_audio_stream_url(&track.video_id).await {
+        Ok(stream_url) => match state.player.play_stream(&stream_url, track.clone()).await {
+            Ok(()) => info!(
+                "[Playback][Native] Direct stream active for video_id={}",
+                track.video_id
+            ),
+            Err(error) => warn!(
+                "[Playback][Native] Stream decode/output failed for video_id={}: {}",
+                track.video_id, error
+            ),
+        },
+        Err(error) => warn!(
+            "[Playback][Native] Direct stream extraction unavailable for video_id={}: {}. The YouTube IFrame path is independent",
+            track.video_id, error
+        ),
     }
 
     let song_payload = SongPayload {

@@ -14,9 +14,10 @@ use audio_player::AudioPlayer;
 use commands::{
     get_account_profile, get_explore_feed, get_home_feed, get_liked_songs, get_lyrics,
     get_playlist_or_album, get_player_status, get_radio_queue, get_search_suggestions,
-    get_settings, get_user_playlists, logout, on_login_complete, on_playback_state_change,
-    on_song_change, open_login_window, play_track, search_music, set_auth_cookies, set_volume,
-    toggle_playback, update_playback_progress, update_settings, AppState,
+    get_settings, get_user_playlists, log_playback_diagnostic, logout, on_login_complete,
+    on_playback_state_change, on_song_change, open_login_window, play_track, search_music,
+    set_auth_cookies, set_volume, toggle_playback, update_playback_progress, update_settings,
+    AppState,
 };
 use config::ConfigManager;
 use discord::DiscordManager;
@@ -136,6 +137,7 @@ pub fn run() {
             toggle_playback,
             set_volume,
             get_player_status,
+            log_playback_diagnostic,
             get_settings,
             update_settings,
             open_login_window,

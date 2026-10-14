@@ -950,11 +950,30 @@ impl InnertubeClient {
         let req = self.apply_auth_headers(req);
 
         let res = req.send().await.map_err(|e| e.to_string())?;
-        let val: Value = res.json().await.map_err(|e| e.to_string())?;
+        let http_status = res.status();
+        let val: Value = res
+            .json()
+            .await
+            .map_err(|e| format!("Player response was not valid JSON (HTTP {http_status}): {e}"))?;
+
+        if !http_status.is_success() {
+            return Err(format!("Player request failed with HTTP {http_status}"));
+        }
+
+        let playability_status = val["playabilityStatus"]["status"]
+            .as_str()
+            .unwrap_or("UNKNOWN");
+        let playability_reason = val["playabilityStatus"]["reason"]
+            .as_str()
+            .unwrap_or("not provided");
 
         let formats = val["streamingData"]["adaptiveFormats"]
             .as_array()
-            .ok_or_else(|| "No streaming formats available".to_string())?;
+            .ok_or_else(|| {
+                format!(
+                    "No streaming formats available (playability status: {playability_status}, reason: {playability_reason})"
+                )
+            })?;
 
         let mut best_audio_url = None;
         let mut best_bitrate = 0;
@@ -980,7 +999,9 @@ impl InnertubeClient {
             return Ok(stream_url);
         }
 
-        Err("Could not retrieve playable audio stream URL".to_string())
+        Err(format!(
+            "No direct audio URL in player response (playability status: {playability_status}, reason: {playability_reason})"
+        ))
     }
 
     fn parse_music_shelf_item(item: &Value) -> Option<TrackItem> {

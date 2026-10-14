@@ -171,6 +171,36 @@ written to `src-tauri/target/release/bundle/appimage/`. The Linux packaging
 workflow under `.github/workflows/` builds and validates both the Arch package
 and AppImage and exposes them as downloadable workflow artifacts.
 
+#### Linux playback diagnostics
+
+The YouTube IFrame player and the optional native Rust stream path are separate.
+Diagnostic lines beginning with `[Playback][Iframe]` include the YouTube error
+code, player state, WebKit user agent, referrer/origin data, and WebKit media
+capability probes. Lines beginning with `[Playback][Native]` report direct
+stream extraction, decoding, or ALSA/PipeWire output separately.
+
+Capture both Cremeplay and GStreamer output while reproducing one failed track:
+
+```bash
+RUST_LOG=info GST_DEBUG=2 ./Cremeplay_*_amd64.AppImage 2>&1 | tee cremeplay-playback.log
+```
+
+For an installed Arch package, replace the AppImage path with `cremeplay`.
+Record installed media components and verify the common YouTube audio decoders:
+
+```bash
+pacman -Q webkit2gtk-4.1 gst-plugins-base gst-plugins-good gst-libav pipewire-alsa \
+  2>&1 | tee -a cremeplay-playback.log
+gst-inspect-1.0 opusdec 2>&1 | tee -a cremeplay-playback.log
+gst-inspect-1.0 avdec_aac 2>&1 | tee -a cremeplay-playback.log
+```
+
+YouTube IFrame error `5` points to the HTML5/WebKit media path, while `153`
+means the embed request lacks an accepted referrer or equivalent client
+identity. Errors `100`, `101`, and `150` are specific to video availability or
+embedding. Do not include account cookies or other credentials when attaching
+the diagnostic log to an issue.
+
 ---
 
 ## Integrations

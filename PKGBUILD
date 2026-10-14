@@ -34,8 +34,24 @@ sha256sums=('SKIP')
 
 pkgver() {
   cd cremeplay
-  git describe --long --tags --abbrev=7 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' || \
-    printf '1.1.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+
+  local version
+  if version="$(git describe --long --tags --match 'v[0-9]*' --abbrev=7 2>/dev/null)"; then
+    version="$(printf '%s' "$version" | sed \
+      -e 's/^v//' \
+      -e 's/\([^-]*-g\)/r\1/' \
+      -e 's/-/./g' \
+      -e 's/[^[:alnum:]+._]/./g')"
+    if [[ -n "$version" ]]; then
+      printf '%s\n' "$version"
+      return
+    fi
+  fi
+
+  local revision short_commit
+  revision="$(git rev-list --count HEAD 2>/dev/null || printf '0')"
+  short_commit="$(git rev-parse --short=7 HEAD 2>/dev/null || printf 'unknown')"
+  printf '1.1.0.r%s.g%s\n' "${revision:-0}" "${short_commit:-unknown}"
 }
 
 prepare() {

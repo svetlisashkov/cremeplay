@@ -122,10 +122,29 @@ impl AudioPlayer {
             .await
             .map_err(|e| format!("Failed to fetch audio stream: {}", e))?;
 
+        let status = res.status();
+        let content_type = res
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("unknown")
+            .to_string();
+        if !status.is_success() {
+            return Err(format!(
+                "Audio stream request returned HTTP {status} ({content_type})"
+            ));
+        }
+
         let bytes = res
             .bytes()
             .await
             .map_err(|e| format!("Failed to read stream bytes: {}", e))?;
+
+        info!(
+            "[AudioPlayer] Received {} bytes with content type {}",
+            bytes.len(),
+            content_type
+        );
 
         let cursor = Cursor::new(bytes.to_vec());
         let source = Decoder::try_from(cursor)
